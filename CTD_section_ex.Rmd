@@ -1,0 +1,266 @@
+---
+title: "CTD section plots"
+output: html_notebook
+---
+
+```{r}
+#load libraries
+
+library(oce)
+library(dplyr)
+library(ggplot2)
+library(metR)
+
+
+```
+## Load function for reading in bathymetry data
+
+```{r}
+load_bathy <- function(bathy_fn, bathy_noaa_fn, x_range, y_range){
+  #' Read in NOAA bathymetry data to standard format
+  #' @param bathy_fn  "bathydata.RDS"
+  #' @param bathy_noaa_fn "bathydata_noaa.RDS"
+  #' @param x_range vector of minimum and maximum longitude values
+  #' @param y_range vector of minimum and maximum latitude values
+
+  
+  #lat and lon min and max 
+  y_min <- y_range[1]
+  y_max <- y_range[2]
+  x_min <-x_range[1]
+  x_max <- x_range[2]
+  
+  
+###BATHYMETRY####
+##Load bathymetry
+#CHS15
+b <- readRDS(bathy_fn)
+bathy <- marmap::as.bathy(b)
+bathy.f_chs <- marmap::fortify.bathy(bathy)
+bathy.f_chs$z <- bathy.f_chs$z*-1
+
+#NOAA
+bathy_noaa <- readRDS(bathy_noaa_fn)
+bathy.f_noaa <- marmap::fortify.bathy(bathy_noaa)
+
+###TIDAL ELLIPSE####
+#Get tidal ellipse
+#tide_ellipse <- readRDS("cdesp_te.RDS")
+
+
+bathy.f_noaa <- subset(bathy.f_noaa, y > y_min & y < y_max & x > x_min & x < x_max) 
+bathy.f_chs <- subset(bathy.f_chs, y > y_min & y < y_max & x > x_min & x < x_max)
+
+lons <- c(x_min, x_max)
+lats <- c(y_min, y_max)
+
+lons_list <- list(lons)
+lats_list <- list(lats)
+
+list(bathy.f_chs)
+
+
+}
+
+```
+
+
+
+## Get CTD and bathymetry data
+
+```{r}
+load('2018_CTD.RData')
+
+bathy_data_list <- load_bathy(bathy_fn = 'bathydata.RDS', bathy_noaa_fn = 'bathydata_noaa.RDS', y_range = c(47, 49), x_range = c(-66, -62))
+
+```
+
+## Section plotting functions
+```{r}
+
+plot_section <- function(data, var, bw, dup, method, bathy_data_list ){
+  #' @param data dataframe from create section (output = 'df')
+  #' @param var variable to be interpolated over section
+  #' @param bw bin width over which to interpolate
+  #' @param dup if method is 'akima' or 'interp', passed to interpolate function to handle duplicate values
+  #' @param method interpolation method 'akima', 'interp' or 'oce'
+  
+  diff_lat <- max(data$latitude) - min(data$latitude)
+  diff_lon <- max(data$longitude) - min(data$longitude)
+  
+  if(diff_lon > diff_lat){
+    coord_var <- 'longitude'
+    coord_b <- 'x'
+    op_var <- 'latitude'
+  }else{
+    coord_var <- 'latitude'
+    coord_b <- 'y'
+    op_var <- 'longitude'
+  }
+  
+  
+  
+  if(method == 'akima'){
+    interpdf <- akima::interp(x = data[[coord_var]], y = data$pressure, z = data[[var]], duplicate = dup ,linear = TRUE  )
+  }
+  if(method == 'interp'){
+    interpdf <- interp::interp(x = data[[coord_var]], y = data$pressure, z = data[[var]], duplicate = dup ,linear = TRUE  )
+  }
+  if(method == 'oce'){
+    interpdf_oce <- oce::interpBarnes(x = data[[coord_var]], y = data$pressure, z = data[[var]] )
+    interpdf <- NULL
+    interpdf$x <- interpdf_oce$xg
+    interpdf$y <- interpdf_oce$yg
+    interpdf$z <- interpdf_oce$zg
+  }
+  
+  #convert to dataframe
+  df <- akima::interp2xyz(interpdf, data.frame = TRUE)
+  
+  # get unique station labels
+  lab_df <- data %>%
+    dplyr::select(., station, latitude, longitude) %>%
+    dplyr::distinct(., station, latitude, longitude)
+  
+  # get bottom topo
+  coord_df <- right_join(df, bathy_data_list[[1]], by = c(x = coord_b))
+  
+  # this section results in errors when stations are not exactly aligned, because it grabs a 'thicker' section of bottom topography
+  
+  if (coord_var == 'longitude'){
+  coord_df_line <- coord_df %>%
+    dplyr::filter(., y.y < max(lab_df[[op_var]]) & y.y > min(lab_df[[op_var]] ))
+  }else{
+    coord_df_line <- coord_df %>%
+      dplyr::filter(., x.y < max(lab_df[[op_var]]) & x.y > min(lab_df[[op_var]] ))
+  }
+  
+  
+  
+    bt <- 0.05
+  
+  coord_var_bins <- seq(from = min(coord_df_line$x), to = max(coord_df_line$x), by = bt)
+
+  z_bot <- list()
+  for( i in 1:length(coord_var_bins)){
+  z_bot[[i]] <-  mean(coord_df_line$z.y[coord_df_line$x < coord_var_bins[[i]]], na.rm = TRUE)
+  }
+  
+  c_df <- data.frame(x = coord_var_bins, z = unlist(z_bot))
+  
+  # find points below bottom
+  
+  for (i in 1:length(df$x)){
+    df$z_bot[[i]] <- abs(min(c_df$z[c_df$x == c_df$x[which(abs(c_df$x-df$x[[i]])==min(abs(c_df$x-df$x[[i]])))]], na.rm = TRUE))
+  }
+  
+  dd <- df %>%
+    dplyr::mutate(., bot = ifelse(df$y > df$z_bot, 1, 0))
+  
+  # get cmocean pallette
+  if (var == 'temperature'){
+  pal <- cmocean::cmocean('thermal')
+  }
+  if(var == 'salinity'){
+    pal <- cmocean::cmocean('haline')
+  }
+  
+  cmo <- pal(n = 100)
+  
+  #  plot with  bathy
+  if (var == 'temperature'){
+    leg_lab <- expression(paste('Temperature [',degree,' C]', sep = ''))
+  }
+  if (var == 'salinity'){
+    leg_lab <- 'Salinity \n[ PSU ]'
+  }
+  
+  p <- ggplot(df) +
+    geom_tile(aes(x = x, y = y, fill = z)) +
+    labs(fill = leg_lab) +
+    scale_y_reverse(name = 'Pressure [db]',  expand = c(0,0), limits = c( max(dd$y[dd$bot == 0]) +300, 0)) + 
+    scale_x_continuous(name = coord_var, limits = c(min(df$x), max(df$x)), expand = c(0,0)) +
+    theme_classic() +
+    geom_contour(aes(x = x, y = y, z= z), col = 'black') +
+    geom_text_contour(aes(x = x, y = y, z= z),binwidth = bw, col = 'white', check_overlap = TRUE, size = 8)+ #CONTOUR LABELS
+    scale_fill_gradientn(colours = cmo, na.value = 'white') +
+    geom_vline(xintercept = lab_df[[coord_var]]) +
+    ggrepel::geom_label_repel(data = lab_df, aes(x = lab_df[[coord_var]], y = 0, label = lab_df$station), fill = 'gray70', size = 7 )+
+    geom_ribbon(data = coord_df_line, aes(x = x, ymax = max(abs(z.y), na.rm = TRUE), ymin = abs(z.y)))+
+    theme(legend.text = element_text(size = 15),
+          legend.key.size = unit(2, 'lines'),
+          legend.title = element_text(size = 16),
+          axis.text = element_text(size = 15), 
+          axis.title = element_text(size = 16))
+
+  
+  return(p)
+}
+# create sections
+
+create_section <- function(dat, stations, output = 'df'){
+  #' Create a dataframe for a CTD section which can be plotted with plot_section
+  #' 
+  #' @param dat CTD dataframe including salinity, temperature, and pressure data (named by IML conventions), as well as longitude, latitude and station data
+  #' @param stations a list of station which should be included in the section
+  #' @param output character vector describing output format either 'oce' or 'df' (Dataframe)
+
+  
+data <- as.section(salinity = dat$PSAL_01[dat$station %in% stations], 
+                         temperature = dat$TE90_01[dat$station %in% stations],
+                         pressure = dat$PRES_01[dat$station %in% stations], 
+                         longitude = dat$longitude[dat$station %in% stations],
+                         latitude = dat$latitude[dat$station %in% stations], 
+                         station = dat$station[dat$station %in% stations])
+if( output == 'df'){
+
+ctd_df <- do.call(rbind, data@data)
+
+df_l <- list()
+for (i in 1:length(ctd_df)){
+  df_l[[i]] <- as.data.frame(ctd_df[[i]]@data)
+}
+names(df_l) <- stations
+
+df <- bind_rows(df_l, .id = 'station')
+
+# add lat and lon back to data frame from oce metadata
+
+df$latitude <- dat$latitude[dat$station %in% stations]
+df$longitude <- dat$longitude[dat$station %in% stations]
+
+return(df)
+
+}else{
+  return(data)
+}
+
+
+
+}
+
+```
+
+
+## Example (worst case scenario)
+
+
+```{r}
+
+sec_b <- c(2, 19, 23) # stations included in section
+
+# create data frame
+df_sec_b <- create_section(dat = df_full, stations = sec_b, output = 'df')
+
+
+df_sec_b$station <- as.numeric(df_sec_b$station) # fix station format
+# plot
+plot_section(data = df_sec_b, var = 'temperature', bw = 1, dup = 'mean', method = 'akima', bathy_data_list = bathy_data_list)+
+  ggtitle('Section B')
+
+```
+
+
+
+
+
