@@ -373,87 +373,94 @@ plot_section <- function(data, var, bw, dup, method, bathy_data_list ){
   return(p)
 }
 # create sections
+# create sections
 
 create_section <- function(dat, stations, output = 'df'){
-  # output can be 'df or 'oce'
-  # uses IML naming scheme
-  
-data <- as.section(salinity = dat$PSAL_01[dat$station %in% stations], 
-                         temperature = dat$TE90_01[dat$station %in% stations],
-                         pressure = dat$PRES_01[dat$station %in% stations], 
-                         longitude = dat$longitude[dat$station %in% stations],
-                         latitude = dat$latitude[dat$station %in% stations], 
-                         station = dat$station[dat$station %in% stations])
-if( output == 'df'){
-
-ctd_df <- do.call(rbind, data@data)
-
-df_l <- list()
-for (i in 1:length(ctd_df)){
-  df_l[[i]] <- as.data.frame(ctd_df[[i]]@data)
-}
-names(df_l) <- stations
-
-df <- bind_rows(df_l, .id = 'station')
-
-
-
-return(df)
-
-}else{
-  return(data)
-}
-
-
-
-}
-
-# load bathy data
-
-load_bathy <- function(bathy_fn, bathy_noaa_fn){
-  
-  #' bathy_fn  "bathydata.RDS"
-  #' bathy_noaa_fn "bathydata_noaa.RDS"
+  #' Create a dataframe for a CTD section which can be plotted with plot_section
   #' 
-  #' 
+  #' @param dat CTD dataframe including salinity, temperature, and pressure data (named by IML conventions), as well as longitude, latitude and station data
+  #' @param stations a list of station which should be included in the section
+  #' @param output character vector describing output format either 'oce' or 'df' (Dataframe)
+  
+  
+  data <- as.section(salinity = dat$PSAL_01[dat$station %in% stations], 
+                     temperature = dat$TE90_01[dat$station %in% stations],
+                     pressure = dat$PRES_01[dat$station %in% stations], 
+                     longitude = dat$longitude[dat$station %in% stations],
+                     latitude = dat$latitude[dat$station %in% stations], 
+                     station = dat$station[dat$station %in% stations])
+  if( output == 'df'){
+    
+    ctd_df <- do.call(rbind, data@data)
+    
+    df_l <- list()
+    for (i in 1:length(ctd_df)){
+      df_l[[i]] <- as.data.frame(ctd_df[[i]]@data)
+    }
+    names(df_l) <- stations
+    
+    df <- bind_rows(df_l, .id = 'station')
+    
+    # add lat and lon back to data frame from oce metadata
+    
+    df$latitude <- dat$latitude[dat$station %in% stations]
+    df$longitude <- dat$longitude[dat$station %in% stations]
+    
+    return(df)
+    
+  }else{
+    return(data)
+  }
+  
+  
+  
+}
 
+
+load_bathy <- function(bathy_fn, bathy_noaa_fn, x_range, y_range){
+  #' Read in NOAA bathymetry data to standard format
+  #' @param bathy_fn  "bathydata.RDS"
+  #' @param bathy_noaa_fn "bathydata_noaa.RDS"
+  #' @param x_range vector of minimum and maximum longitude values
+  #' @param y_range vector of minimum and maximum latitude values
+  
   
   #lat and lon min and max 
-  y_min_gsl <- 47.0
-  y_max_gsl <- 49
-  x_min_gsl <- -66
-  x_max_gsl <- -62
+  y_min <- y_range[1]
+  y_max <- y_range[2]
+  x_min <-x_range[1]
+  x_max <- x_range[2]
   
   
-###BATHYMETRY####
-##Load bathymetry
-#CHS15
-b <- readRDS(bathy_fn)
-bathy <- marmap::as.bathy(b)
-bathy.f_chs <- marmap::fortify.bathy(bathy)
-bathy.f_chs$z <- bathy.f_chs$z*-1
-
-#NOAA
-bathy_noaa <- readRDS(bathy_noaa_fn)
-bathy.f_noaa <- marmap::fortify.bathy(bathy_noaa)
-
-###TIDAL ELLIPSE####
-#Get tidal ellipse
-#tide_ellipse <- readRDS("cdesp_te.RDS")
-
-
-bathy.f_noaa <- subset(bathy.f_noaa, y > y_min_gsl & y < y_max_gsl & x > x_min_gsl & x < x_max_gsl) #SWGSL bathymetry extent
-bathy.f_chs <- subset(bathy.f_chs, y > y_min_gsl & y < y_max_gsl & x > x_min_gsl & x < x_max_gsl)
-
-lons_gsl <- c(x_min_gsl, x_max_gsl)
-lats_gsl <- c(y_min_gsl, y_max_gsl)
-
-lons_list <- list(lons_gsl)
-lats_list <- list(lats_gsl)
-
-list(bathy.f_chs)
-
-
+  ###BATHYMETRY####
+  ##Load bathymetry
+  #CHS15
+  b <- readRDS(bathy_fn)
+  bathy <- marmap::as.bathy(b)
+  bathy.f_chs <- marmap::fortify.bathy(bathy)
+  bathy.f_chs$z <- bathy.f_chs$z*-1
+  
+  #NOAA
+  bathy_noaa <- readRDS(bathy_noaa_fn)
+  bathy.f_noaa <- marmap::fortify.bathy(bathy_noaa)
+  
+  ###TIDAL ELLIPSE####
+  #Get tidal ellipse
+  #tide_ellipse <- readRDS("cdesp_te.RDS")
+  
+  
+  bathy.f_noaa <- subset(bathy.f_noaa, y > y_min & y < y_max & x > x_min & x < x_max) 
+  bathy.f_chs <- subset(bathy.f_chs, y > y_min & y < y_max & x > x_min & x < x_max)
+  
+  lons <- c(x_min, x_max)
+  lats <- c(y_min, y_max)
+  
+  lons_list <- list(lons)
+  lats_list <- list(lats)
+  
+  list(bathy.f_chs)
+  
+  
 }
 
 
